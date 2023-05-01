@@ -1,0 +1,85 @@
+import tensorflow as tf
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from matplotlib import pyplot as plt
+
+def load_dataset():
+    df = pd.read_csv('arrival_from_australia.csv', index_col='Date')
+    return df
+
+dataset = load_dataset()
+
+num_input = 1
+num_output = 1
+context_unit = 3
+time_seq = 3
+
+train_data = dataset[:int(len(dataset)*0.7)]
+test_data = dataset[len(train_data):]
+
+minMaxScaler = MinMaxScaler()
+norm_train_data = minMaxScaler.fit_transform(train_data)
+norm_test_data = minMaxScaler.fit_transform(test_data)
+
+cell = tf.nn.rnn_cell.BasicRNNCell(context_unit, activation=tf.nn.relu)
+cell = tf.contrib.rnn.OutputProjectionWrapper(cell, output_size=num_output, activation=tf.nn.relu)
+
+feature_placeholder = tf.placeholder(tf.float32, [None, time_seq, num_input])
+target_placeholder = tf.placeholder(tf.float32, [None, time_seq, num_output])
+
+output, _ = tf.nn.dynamic_rnn(cell, feature_placeholder, dtype=tf.float32)
+
+error = tf.reduce_mean((0.5 * (target_placeholder - output)) ** 2)
+
+lr = 0.1
+optimizer = tf.train.AdamOptimizer(lr).minimize(error)
+
+epoch = 1000
+batch_size = 3
+
+def next_batch(dataset, batch_size):
+    x_batch = np.zeros([batch_size, time_seq, num_input])
+    y_batch = np.zeros([batch_size, time_seq, num_output])
+
+    for i in range(batch_size):
+        start = np.random.randint(0, len(dataset) - time_seq)
+        x_batch[i] = dataset[start:start+time_seq]
+        y_batch[i] = dataset[start+1:start+1+time_seq]
+
+    return x_batch, y_batch
+
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+
+    for i in range(1, epoch+1):
+        x_batch, y_batch = next_batch(norm_train_data, batch_size)
+
+        train_data = {
+            feature_placeholder: x_batch,
+            target_placeholder: y_batch
+        }
+
+        sess.run(optimizer, feed_dict=train_data)
+
+        if(i%50==0):
+            loss = sess.run(error, feed_dict=train_data)
+            print(f"Loss = {loss}")
+
+    seed_data = list(norm_test_data)
+    for i in range(len(test_data)):
+        x_batch = np.array(seed_data[-time_seq:]).reshape([1, time_seq, num_input])
+
+        test_dict = {
+            feature_placeholder: x_batch
+        }
+
+        predict = sess.run(output, feed_dict=test_dict)
+        seed_data.append(predict[0, -1, 0])
+        
+    result = minMaxScaler.inverse_transform(np.array(seed_data[-len(test_data):]).reshape(-1, 1)).reshape([len(test_data), 1])
+
+    test_data['prediction'] = result[:,0]
+    test_data.plot()
+    plt.show()
